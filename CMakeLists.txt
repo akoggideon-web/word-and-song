@@ -86,6 +86,12 @@ if(ENABLE_WHISPER)
   endif()
   set(CMAKE_COMPILE_WARNING_AS_ERROR ${_saved_warn_as_error})
 
+  # The OBS template enables Objective-C ARC for every Xcode target, but ggml's Metal
+  # backend manages memory manually (retain/release), so turn ARC off for it.
+  if(APPLE AND TARGET ggml-metal)
+    set_target_properties(ggml-metal PROPERTIES XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC NO)
+  endif()
+
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE whisper)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE HAVE_WHISPER=1)
   target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/whisper-engine.cpp)
