@@ -24,6 +24,17 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QVBoxLayout>
+#include <QDir>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QImageReader>
+#include <QPainter>
+
+#include <cstring>
+#include <utility>
 
 namespace ws {
 namespace {
@@ -118,7 +129,14 @@ ThemeEditor::ThemeEditor(const std::string &startTheme, ContentKind previewKind,
 		f->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 		f->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 	}
-	scroll->setWidget(panel);
+	auto *panelOuter = new QWidget(scroll);
+	auto *outerV = new QVBoxLayout(panelOuter);
+	outerV->setContentsMargins(0, 0, 0, 0);
+	panel->setParent(panelOuter);
+	outerV->addWidget(panel);
+	outerV->addWidget(buildImagesBox(panelOuter));
+	outerV->addStretch(1);
+	scroll->setWidget(panelOuter);
 	right->addWidget(scroll, 1);
 
 	style_ = new QComboBox(panel);
@@ -127,6 +145,7 @@ ThemeEditor::ThemeEditor(const std::string &startTheme, ContentKind previewKind,
 	style_->addItem(T("Style.Tag"), StyleTag);
 	style_->addItem(T("Style.Clean"), StyleClean);
 	style_->addItem(T("Style.Split"), StyleSplit);
+	style_->addItem(T("Style.Image"), StyleImage);
 	face_ = new QFontComboBox(panel);
 	face_->setMinimumContentsLength(12);
 	face_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -212,6 +231,10 @@ ThemeEditor::ThemeEditor(const std::string &startTheme, ContentKind previewKind,
 	for (QSpinBox *s : {bodySize_, titleSize_, maxLines_, margin_, padding_, radius_, fade_})
 		connect(s, &QSpinBox::valueChanged, this, &ThemeEditor::onControlChanged);
 	connect(width_, &QSlider::valueChanged, this, &ThemeEditor::onControlChanged);
+	for (QComboBox *c : {bgFit_, logoPos_, textV_})
+		connect(c, &QComboBox::currentIndexChanged, this, &ThemeEditor::onControlChanged);
+	for (QSpinBox *sp : {logoSize_, textX_, textY_, textW_, textH_})
+		connect(sp, &QSpinBox::valueChanged, this, &ThemeEditor::onControlChanged);
 	connect(textColor_, &QPushButton::clicked, this, [this] { pickColor(textColor_, "text_color", false); });
 	connect(titleColor_, &QPushButton::clicked, this, [this] { pickColor(titleColor_, "title_color", false); });
 	connect(accentColor_, &QPushButton::clicked, this, [this] { pickColor(accentColor_, "accent_color", false); });
@@ -341,6 +364,15 @@ void ThemeEditor::loadControls()
 	padding_->setValue((int)obs_data_get_int(working_, "padding"));
 	radius_->setValue((int)obs_data_get_int(working_, "radius"));
 	fade_->setValue((int)obs_data_get_int(working_, "fade_ms"));
+	bgFit_->setCurrentIndex(obs_data_get_int(working_, "bg_fit") == 1 ? 1 : 0);
+	logoSize_->setValue((int)obs_data_get_int(working_, "logo_size"));
+	logoPos_->setCurrentIndex(obs_data_get_int(working_, "logo_pos") == 1 ? 1 : 0);
+	textX_->setValue((int)obs_data_get_int(working_, "text_x"));
+	textY_->setValue((int)obs_data_get_int(working_, "text_y"));
+	textW_->setValue((int)obs_data_get_int(working_, "text_w"));
+	textH_->setValue((int)obs_data_get_int(working_, "text_h"));
+	textV_->setCurrentIndex(std::clamp((int)obs_data_get_int(working_, "text_valign"), 0, 2));
+	updateImageLabels();
 	loading_ = false;
 	onControlChanged(); // writes a complete font object, keeps dirty_ unchanged
 	dirty_ = false;
@@ -375,6 +407,15 @@ void ThemeEditor::onControlChanged()
 	obs_data_set_int(working_, "padding", padding_->value());
 	obs_data_set_int(working_, "radius", radius_->value());
 	obs_data_set_int(working_, "fade_ms", fade_->value());
+	obs_data_set_int(working_, "bg_fit", bgFit_->currentIndex());
+	obs_data_set_int(working_, "logo_size", logoSize_->value());
+	obs_data_set_int(working_, "logo_pos", logoPos_->currentIndex());
+	obs_data_set_int(working_, "text_x", textX_->value());
+	obs_data_set_int(working_, "text_y", textY_->value());
+	obs_data_set_int(working_, "text_w", textW_->value());
+	obs_data_set_int(working_, "text_h", textH_->value());
+	obs_data_set_int(working_, "text_valign", textV_->currentIndex());
+	areaRow_->setEnabled(style_->currentData().toInt() == StyleImage);
 	dirty_ = true;
 	saveBtn_->setText(currentBuiltIn_ ? T("Editor.SaveCopy") : T("Editor.Save"));
 	updatePreview();
@@ -400,6 +441,16 @@ void ThemeEditor::updatePreview()
 		return;
 	auto kind = (ContentKind)previewKind_->currentData().toInt();
 	QImage img = renderThemePreview(obs_data_get_json(working_), kind, preview_->width(), preview_->height());
+	if (obs_data_get_int(working_, "style") == StyleImage) {
+		// Show where the text goes so it's easy to line up with the design.
+		QPainter p(&img);
+		QPen pen(QColor(255, 220, 60, 220), 1, Qt::DashLine);
+		p.setPen(pen);
+		p.drawRect(QRectF(img.width() * textX_->value() / 100.0, img.height() * textY_->value() / 100.0,
+				  img.width() * textW_->value() / 100.0 - 1,
+				  img.height() * textH_->value() / 100.0 - 1));
+		p.end();
+	}
 	preview_->setPixmap(QPixmap::fromImage(img));
 }
 
@@ -498,6 +549,127 @@ void ThemeEditor::reject()
 {
 	if (confirmDiscard())
 		QDialog::reject();
+}
+
+QWidget *ThemeEditor::buildImagesBox(QWidget *parent)
+{
+	auto *box = new QGroupBox(T("Img.Section"), parent);
+	auto *grid = new QGridLayout(box);
+	grid->setColumnStretch(3, 1);
+	auto row = [&](int r, const QString &label, const char *key, QLabel *&nameLabel) {
+		grid->addWidget(new QLabel(label, box), r, 0, Qt::AlignRight);
+		auto *choose = new QPushButton(T("Img.Choose"), box);
+		auto *clear = new QPushButton(QStringLiteral("✕"), box);
+		clear->setToolTip(T("Img.Clear"));
+		clear->setFixedWidth(32);
+		nameLabel = new QLabel(box);
+		nameLabel->setStyleSheet(QStringLiteral("color:#aaa;"));
+		std::string k = key;
+		connect(choose, &QPushButton::clicked, this, [this, k] { chooseImage(k.c_str()); });
+		connect(clear, &QPushButton::clicked, this, [this, k] { clearImage(k.c_str()); });
+		grid->addWidget(choose, r, 1);
+		grid->addWidget(clear, r, 2);
+		grid->addWidget(nameLabel, r, 3);
+	};
+	row(0, T("Img.Background"), "bg_image", bgLabel_);
+	bgFit_ = new QComboBox(box);
+	bgFit_->addItem(T("Img.FitCover"));
+	bgFit_->addItem(T("Img.FitStretch"));
+	grid->addWidget(bgFit_, 0, 4);
+	auto *tintNote = new QLabel(T("Img.TintNote"), box);
+	tintNote->setStyleSheet(QStringLiteral("color:#888;font-size:11px;"));
+	grid->addWidget(tintNote, 1, 1, 1, 4);
+
+	row(2, T("Img.Logo"), "logo_image", logoLabel_);
+	auto *logoOpts = new QHBoxLayout();
+	logoSize_ = spin(box, 16, 400, QStringLiteral(" px"));
+	logoPos_ = new QComboBox(box);
+	logoPos_->addItem(T("Align.Left"));
+	logoPos_->addItem(T("Img.Right"));
+	logoOpts->addWidget(logoSize_);
+	logoOpts->addWidget(logoPos_);
+	grid->addLayout(logoOpts, 2, 4);
+
+	row(3, T("Img.Frame"), "frame_image", frameLabel_);
+	areaRow_ = new QWidget(box);
+	auto *area = new QHBoxLayout(areaRow_);
+	area->setContentsMargins(0, 0, 0, 0);
+	textX_ = spin(areaRow_, 0, 100, QStringLiteral("%"));
+	textY_ = spin(areaRow_, 0, 100, QStringLiteral("%"));
+	textW_ = spin(areaRow_, 1, 100, QStringLiteral("%"));
+	textH_ = spin(areaRow_, 1, 100, QStringLiteral("%"));
+	textV_ = new QComboBox(areaRow_);
+	textV_->addItem(T("Img.VTop"));
+	textV_->addItem(T("Img.VCenter"));
+	textV_->addItem(T("Img.VBottom"));
+	area->addWidget(new QLabel(T("Img.TextArea"), areaRow_));
+	for (auto [lbl, sp] : {std::pair{"X", textX_}, {"Y", textY_}, {"W", textW_}, {"H", textH_}}) {
+		area->addWidget(new QLabel(QString::fromLatin1(lbl), areaRow_));
+		area->addWidget(sp);
+	}
+	area->addWidget(textV_);
+	area->addStretch(1);
+	grid->addWidget(areaRow_, 4, 1, 1, 4);
+	auto *frameNote = new QLabel(T("Img.FrameNote"), box);
+	frameNote->setWordWrap(true);
+	frameNote->setStyleSheet(QStringLiteral("color:#888;font-size:11px;"));
+	grid->addWidget(frameNote, 5, 1, 1, 4);
+	return box;
+}
+
+void ThemeEditor::updateImageLabels()
+{
+	auto name = [this](const char *key) {
+		QString v = QString::fromUtf8(obs_data_get_string(working_, key));
+		return v.isEmpty() ? T("Img.None") : QFileInfo(v).fileName();
+	};
+	bgLabel_->setText(name("bg_image"));
+	logoLabel_->setText(name("logo_image"));
+	frameLabel_->setText(name("frame_image"));
+	areaRow_->setEnabled(obs_data_get_int(working_, "style") == StyleImage);
+}
+
+void ThemeEditor::chooseImage(const char *key)
+{
+	QString file = QFileDialog::getOpenFileName(
+		this, T("Img.Choose"), QString(),
+		T("Graphics.Filter") + QStringLiteral(" (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff)"));
+	if (file.isEmpty())
+		return;
+	if (QImageReader(file).size().isEmpty()) {
+		QMessageBox::warning(this, T("Img.Choose"), T("Img.Unreadable"));
+		return;
+	}
+	// Keep our own copy so the theme survives the original being moved or deleted.
+	QString dir = QString::fromStdString(ThemeLibrary::instance().assetsDir());
+	QDir().mkpath(dir);
+	QFileInfo src(file);
+	QString dest = QDir(dir).filePath(src.fileName());
+	for (int n = 2; QFileInfo::exists(dest); n++) {
+		QFile a(file), b(dest);
+		if (a.size() == QFileInfo(dest).size() && a.open(QIODevice::ReadOnly) && b.open(QIODevice::ReadOnly) &&
+		    a.readAll() == b.readAll())
+			break; // same image already imported
+		dest = QDir(dir).filePath(
+			QStringLiteral("%1-%2.%3").arg(src.completeBaseName()).arg(n).arg(src.suffix()));
+	}
+	if (!QFileInfo::exists(dest) && !QFile::copy(file, dest)) {
+		QMessageBox::warning(this, T("Img.Choose"), T("Img.CopyFailed"));
+		return;
+	}
+	std::string ref = "theme-assets/" + QFileInfo(dest).fileName().toStdString();
+	obs_data_set_string(working_, key, ref.c_str());
+	if (strcmp(key, "frame_image") == 0 && style_->currentData().toInt() != StyleImage)
+		style_->setCurrentIndex(style_->findData(StyleImage)); // a design implies the designed style
+	updateImageLabels();
+	onControlChanged();
+}
+
+void ThemeEditor::clearImage(const char *key)
+{
+	obs_data_set_string(working_, key, "");
+	updateImageLabels();
+	onControlChanged();
 }
 
 } // namespace ws

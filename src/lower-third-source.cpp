@@ -13,6 +13,8 @@
 #include <QFontMetrics>
 #include <QImage>
 #include <QImageReader>
+#include <QDateTime>
+#include <QFileInfo>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
@@ -21,6 +23,8 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <map>
+#include <mutex>
 
 namespace ws {
 namespace {
@@ -57,6 +61,15 @@ struct Style {
 	bool shadow = true;
 	int maxLines = 4;
 	int fadeMs = 350;
+	// Images (stored as "theme-assets/<file>" or an absolute path)
+	QString bgImage;
+	bool bgStretch = false;
+	QString logoImage;
+	int logoSize = 80;
+	bool logoRight = false;
+	QString frameImage;                                // StyleImage: the designed graphic
+	int textX = 8, textY = 76, textW = 60, textH = 16; // StyleImage: text area, % of the frame
+	int textVAlign = 1;                                // 0 top, 1 centre, 2 bottom
 };
 
 struct Card {
@@ -133,6 +146,17 @@ Style readLook(obs_data_t *settings)
 	s.shadow = obs_data_get_bool(settings, "shadow");
 	s.maxLines = (int)obs_data_get_int(settings, "max_lines");
 	s.fadeMs = (int)obs_data_get_int(settings, "fade_ms");
+	s.bgImage = QString::fromUtf8(obs_data_get_string(settings, "bg_image"));
+	s.bgStretch = obs_data_get_int(settings, "bg_fit") == 1;
+	s.logoImage = QString::fromUtf8(obs_data_get_string(settings, "logo_image"));
+	s.logoSize = (int)obs_data_get_int(settings, "logo_size");
+	s.logoRight = obs_data_get_int(settings, "logo_pos") == 1;
+	s.frameImage = QString::fromUtf8(obs_data_get_string(settings, "frame_image"));
+	s.textX = (int)obs_data_get_int(settings, "text_x");
+	s.textY = (int)obs_data_get_int(settings, "text_y");
+	s.textW = (int)obs_data_get_int(settings, "text_w");
+	s.textH = (int)obs_data_get_int(settings, "text_h");
+	s.textVAlign = (int)obs_data_get_int(settings, "text_valign");
 	return s;
 }
 
@@ -149,6 +173,7 @@ void scaleStyle(Style &s, double f)
 	s.padding = sc(s.padding);
 	s.margin = sc(s.margin);
 	s.radius = sc(s.radius);
+	s.logoSize = std::max(8, sc(s.logoSize));
 }
 
 Style themeStyle(const std::string &json)
@@ -209,9 +234,120 @@ void drawShadowedText(QPainter &p, const QRect &r, int align, const QFont &f, co
 	p.drawText(r, align, t);
 }
 
+// Theme images, decoded once and reused (the dock's preview and the displays share this).
+QImage loadThemeImage(const QString &ref)
+{
+	if (ref.isEmpty())
+		return {};
+	static std::mutex mutex;
+	static std::map<QString, std::pair<qint64, QImage>> cache;
+	QString path = QString::fromStdString(ThemeLibrary::instance().resolveAsset(ref.toStdString()));
+	QFileInfo fi(path);
+	if (!fi.exists())
+		return {};
+	qint64 stamp = fi.lastModified().toMSecsSinceEpoch() ^ fi.size();
+	std::lock_guard<std::mutex> lock(mutex);
+	auto it = cache.find(path);
+	if (it != cache.end() && it->second.first == stamp)
+		return it->second.second;
+	QImageReader reader(path);
+	reader.setAutoTransform(true);
+	QImage img = reader.read().convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+	if (cache.size() > 24)
+		cache.clear();
+	cache[path] = {stamp, img};
+	return img;
+}
+
+// Fills `target` with the image: cropped to cover it, or stretched.
+void drawImageInto(QPainter &p, const QRectF &target, const QImage &img, bool stretch)
+{
+	if (img.isNull() || target.isEmpty())
+		return;
+	if (stretch) {
+		p.drawImage(target, img);
+		return;
+	}
+	double scale = std::max(target.width() / img.width(), target.height() / img.height());
+	QSizeF srcSize(target.width() / scale, target.height() / scale);
+	QRectF src((img.width() - srcSize.width()) / 2.0, (img.height() - srcSize.height()) / 2.0, srcSize.width(),
+		   srcSize.height());
+	p.drawImage(target, img, src);
+}
+
+// "Designed graphic" style: a full-frame image with the text placed in a chosen area.
+QImage renderDesigned(const LiveContent &content, const Style &s, uint32_t cw, uint32_t ch, int &outX, int &outY)
+{
+	outX = outY = 0;
+	QImage canvas((int)cw, (int)ch, QImage::Format_RGBA8888_Premultiplied);
+	canvas.fill(Qt::transparent);
+	QPainter p(&canvas);
+	p.setRenderHint(QPainter::Antialiasing);
+	p.setRenderHint(QPainter::TextAntialiasing);
+	p.setRenderHint(QPainter::SmoothPixmapTransform);
+	QImage frame = loadThemeImage(s.frameImage);
+	if (!frame.isNull()) {
+		QSize fit = frame.size().scaled((int)cw, (int)ch, Qt::KeepAspectRatio);
+		p.drawImage(QRect(((int)cw - fit.width()) / 2, ((int)ch - fit.height()) / 2, fit.width(), fit.height()),
+			    frame);
+	}
+	const QRect area((int)(cw * std::clamp(s.textX, 0, 100) / 100), (int)(ch * std::clamp(s.textY, 0, 100) / 100),
+			 std::max(40, (int)(cw * std::clamp(s.textW, 1, 100) / 100)),
+			 std::max(20, (int)(ch * std::clamp(s.textH, 1, 100) / 100)));
+	const bool isLyrics = content.kind == ContentKind::Lyrics;
+	const bool isCard = content.kind == ContentKind::Card;
+	const int align = (s.center || isLyrics ? Qt::AlignHCenter : Qt::AlignLeft) | Qt::TextWordWrap;
+
+	QString title = s.showTitle ? QString::fromStdString(content.title) : QString();
+	if (s.upperTitle)
+		title = title.toUpper();
+	const QString body = QString::fromStdString(content.body);
+	QFont titleFont(s.face);
+	titleFont.setBold(true);
+	titleFont.setLetterSpacing(QFont::PercentageSpacing, s.upperTitle ? 108 : 100);
+	QFont bodyFont(s.face);
+	bodyFont.setBold(s.bold || isCard);
+	bodyFont.setItalic(s.italic);
+
+	// Shrink both lines together until they fit the text area.
+	int bodySize = std::max(10, s.bodySize), titleSize = std::max(8, s.titleSize);
+	int bodyH = 0, titleH = 0, gap = 0;
+	for (int step = 0; step < 60; step++) {
+		titleFont.setPixelSize(titleSize);
+		bodyFont.setPixelSize(bodySize);
+		QFontMetrics fm(bodyFont), tfm(titleFont);
+		titleH = title.isEmpty() ? 0
+					 : tfm.boundingRect(QRect(0, 0, area.width(), 10000), align, title).height();
+		bodyH = body.isEmpty() ? 0 : fm.boundingRect(QRect(0, 0, area.width(), 100000), align, body).height();
+		gap = titleH && bodyH ? std::max(4, titleSize / 3) : 0;
+		bool fits = titleH + gap + bodyH <= area.height();
+		if (fits && isLyrics)
+			for (const QString &line : body.split('\n'))
+				if (fm.horizontalAdvance(line) > area.width())
+					fits = false;
+		if (fits || bodySize <= 10)
+			break;
+		bodySize = std::max(10, bodySize * 94 / 100);
+		titleSize = std::max(8, titleSize * 96 / 100);
+	}
+	const int total = titleH + gap + bodyH;
+	int y = s.textVAlign == 0   ? area.top()
+		: s.textVAlign == 2 ? area.bottom() - total
+				    : area.top() + (area.height() - total) / 2;
+	const bool below = s.titleBelow || isCard;
+	QRect titleRect(area.left(), below ? y + bodyH + gap : y, area.width(), titleH);
+	QRect bodyRect(area.left(), below ? y : y + titleH + gap, area.width(), bodyH);
+	drawShadowedText(p, titleRect, align, titleFont, s.titleColor, title, s.shadow, false);
+	drawShadowedText(p, bodyRect, align, bodyFont, s.textColor, body, s.shadow, false);
+	p.end();
+	return canvas;
+}
+
 // Lays out and paints a text card. Returns the image; outX/outY = where it goes on the canvas.
 QImage renderText(const LiveContent &content, Style s, int layout, uint32_t cw, uint32_t ch, int &outX, int &outY)
 {
+	if (s.variant == StyleImage)
+		return renderDesigned(content, s, cw, ch, outX, outY);
 	const bool full = layout == FullScreen;
 	const bool isCard = content.kind == ContentKind::Card;
 	const bool isLyrics = content.kind == ContentKind::Lyrics;
@@ -236,8 +372,12 @@ QImage renderText(const LiveContent &content, Style s, int layout, uint32_t cw, 
 					       : (int)((double)cw * s.widthPct / 100.0);
 	const int stripe = variant == StyleBar ? std::max(8, s.padding / 3) : 0;
 	const int splitW = variant == StyleSplit ? std::max(160, boxW * 30 / 100) : 0;
-	const int textX = s.padding + stripe + splitW;
-	const int innerW = std::max(100, boxW - textX - s.padding);
+	// Logo: a square slot beside the text (not used in the split panel or on full screen).
+	const QImage logo = full || variant == StyleSplit ? QImage() : loadThemeImage(s.logoImage);
+	const int logoW = logo.isNull() ? 0 : s.logoSize;
+	const int logoGap = logoW ? std::max(10, s.padding / 2) : 0;
+	const int textX = s.padding + stripe + splitW + (s.logoRight ? 0 : logoW + logoGap);
+	const int innerW = std::max(100, boxW - textX - s.padding - (s.logoRight ? logoW + logoGap : 0));
 	const int align = (s.center || isLyrics || full ? Qt::AlignHCenter : Qt::AlignLeft) | Qt::TextWordWrap;
 
 	QFont titleFont(s.face);
@@ -296,7 +436,7 @@ QImage renderText(const LiveContent &content, Style s, int layout, uint32_t cw, 
 
 	int contentH = bodyH + titleH + gap;
 	int boxH = full ? (int)ch - 2 * s.margin
-			: std::max(contentH, splitTitleH) + 2 * s.padding + (hasTag ? tagOverlap : 0);
+			: std::max({contentH, splitTitleH, logoW}) + 2 * s.padding + (hasTag ? tagOverlap : 0);
 	const int imgH = boxH + (hasTag ? tagH - tagOverlap : 0);
 	const int boxTop = hasTag ? tagH - tagOverlap : 0;
 
@@ -315,10 +455,34 @@ QImage renderText(const LiveContent &content, Style s, int layout, uint32_t cw, 
 	p.setRenderHint(QPainter::TextAntialiasing);
 
 	const QRectF boxRect(0, boxTop, boxW, boxH);
-	if (variant != StyleClean && s.boxColor.alpha() > 0) {
+	const QImage bg = variant == StyleClean ? QImage() : loadThemeImage(s.bgImage);
+	if (!bg.isNull()) {
+		// Background image inside the box; the box colour tints it.
+		QPainterPath path;
+		path.addRoundedRect(boxRect, s.radius, s.radius);
+		p.save();
+		p.setClipPath(path);
+		p.setRenderHint(QPainter::SmoothPixmapTransform);
+		drawImageInto(p, boxRect, bg, s.bgStretch);
+		if (s.boxColor.alpha() > 0)
+			p.fillRect(boxRect, s.boxColor);
+		p.restore();
+	} else if (variant != StyleClean && s.boxColor.alpha() > 0) {
 		QPainterPath path;
 		path.addRoundedRect(boxRect, s.radius, s.radius);
 		p.fillPath(path, s.boxColor);
+	}
+	if (logoW) {
+		const int contentTop = boxTop + (hasTag ? tagOverlap : 0);
+		const int slotY = contentTop + (boxTop + boxH - contentTop - logoW) / 2;
+		const int slotX = s.logoRight ? boxW - s.padding - logoW : s.padding + stripe;
+		QSize fit = logo.size().scaled(logoW, logoW, Qt::KeepAspectRatio);
+		p.save();
+		p.setRenderHint(QPainter::SmoothPixmapTransform);
+		p.drawImage(QRect(slotX + (logoW - fit.width()) / 2, slotY + (logoW - fit.height()) / 2, fit.width(),
+				  fit.height()),
+			    logo);
+		p.restore();
 	}
 	if (variant == StyleBar) {
 		p.fillRect(QRectF(0, boxTop, stripe, boxH), s.accentColor);
@@ -481,6 +645,17 @@ void getDefaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "max_lines", 4);
 	obs_data_set_default_int(settings, "fade_ms", 350);
 	obs_data_set_default_bool(settings, "sample", false);
+	obs_data_set_default_string(settings, "bg_image", "");
+	obs_data_set_default_int(settings, "bg_fit", 0);
+	obs_data_set_default_string(settings, "logo_image", "");
+	obs_data_set_default_int(settings, "logo_size", 80);
+	obs_data_set_default_int(settings, "logo_pos", 0);
+	obs_data_set_default_string(settings, "frame_image", "");
+	obs_data_set_default_int(settings, "text_x", 8);
+	obs_data_set_default_int(settings, "text_y", 76);
+	obs_data_set_default_int(settings, "text_w", 60);
+	obs_data_set_default_int(settings, "text_h", 16);
+	obs_data_set_default_int(settings, "text_valign", 1);
 	obs_data_set_default_int(settings, "size_pct", 100);
 	obs_data_set_default_int(settings, "offset_y", 0);
 }
@@ -534,6 +709,7 @@ obs_properties_t *getProperties(void *)
 	obs_property_list_add_int(p, obs_module_text("Style.Tag"), StyleTag);
 	obs_property_list_add_int(p, obs_module_text("Style.Clean"), StyleClean);
 	obs_property_list_add_int(p, obs_module_text("Style.Split"), StyleSplit);
+	obs_property_list_add_int(p, obs_module_text("Style.Image"), StyleImage);
 	obs_properties_add_font(look, "font", obs_module_text("Font"));
 	obs_properties_add_int_slider(look, "title_size", obs_module_text("TitleSize"), 12, 120, 1);
 	obs_properties_add_color(look, "text_color", obs_module_text("TextColor"));
@@ -556,6 +732,15 @@ obs_properties_t *getProperties(void *)
 	obs_properties_add_int(look, "padding", obs_module_text("Padding"), 0, 200, 2);
 	obs_properties_add_int(look, "radius", obs_module_text("Radius"), 0, 200, 1);
 	obs_properties_add_int_slider(look, "fade_ms", obs_module_text("FadeMs"), 0, 2000, 50);
+	const char *filter = "Images (*.png *.jpg *.jpeg *.webp *.bmp)";
+	obs_properties_add_path(look, "bg_image", obs_module_text("Img.Background"), OBS_PATH_FILE, filter, nullptr);
+	obs_properties_add_path(look, "logo_image", obs_module_text("Img.Logo"), OBS_PATH_FILE, filter, nullptr);
+	obs_properties_add_int(look, "logo_size", obs_module_text("Img.LogoSize"), 16, 400, 2);
+	obs_properties_add_path(look, "frame_image", obs_module_text("Img.Frame"), OBS_PATH_FILE, filter, nullptr);
+	obs_properties_add_int_slider(look, "text_x", obs_module_text("Img.TextX"), 0, 100, 1);
+	obs_properties_add_int_slider(look, "text_y", obs_module_text("Img.TextY"), 0, 100, 1);
+	obs_properties_add_int_slider(look, "text_w", obs_module_text("Img.TextW"), 1, 100, 1);
+	obs_properties_add_int_slider(look, "text_h", obs_module_text("Img.TextH"), 1, 100, 1);
 	obs_properties_add_group(props, "look", obs_module_text("OwnLook"), OBS_GROUP_NORMAL, look);
 	return props;
 }

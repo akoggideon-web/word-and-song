@@ -10,7 +10,7 @@ struct obs_data;
 namespace ws {
 
 // Visual style families a theme can use.
-enum ThemeStyle { StyleCard = 0, StyleBar = 1, StyleTag = 2, StyleClean = 3, StyleSplit = 4 };
+enum ThemeStyle { StyleCard = 0, StyleBar = 1, StyleTag = 2, StyleClean = 3, StyleSplit = 4, StyleImage = 5 };
 
 struct ThemeEntry {
 	std::string id;
@@ -38,6 +38,12 @@ public:
 	static const std::vector<std::string> &lookKeys();
 	// Copies only the look keys out of a display source's settings, as JSON.
 	static std::string extractLook(obs_data *settings);
+
+	// Images used by themes are copied into this folder (UTF-8 path) and stored in themes as
+	// "theme-assets/<file>", so themes keep working when the original file moves.
+	std::string assetsDir() const;
+	// Turns a stored image reference into a full path (absolute paths pass through).
+	std::string resolveAsset(const std::string &ref) const;
 
 private:
 	ThemeLibrary();

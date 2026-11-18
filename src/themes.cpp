@@ -160,11 +160,12 @@ ThemeLibrary &ThemeLibrary::instance()
 
 const std::vector<std::string> &ThemeLibrary::lookKeys()
 {
-	static const std::vector<std::string> keys = {"style",       "font",           "title_size",  "text_color",
-						      "title_color", "accent_color",   "box_color",   "box_width",
-						      "margin",      "padding",        "radius",      "align",
-						      "show_title",  "title_position", "upper_title", "shadow",
-						      "max_lines",   "fade_ms"};
+	static const std::vector<std::string> keys = {
+		"style",      "font",           "title_size",  "text_color", "title_color", "accent_color",
+		"box_color",  "box_width",      "margin",      "padding",    "radius",      "align",
+		"show_title", "title_position", "upper_title", "shadow",     "max_lines",   "fade_ms",
+		"bg_image",   "bg_fit",         "logo_image",  "logo_size",  "logo_pos",    "frame_image",
+		"text_x",     "text_y",         "text_w",      "text_h",     "text_valign"};
 	return keys;
 }
 
@@ -305,6 +306,22 @@ bool ThemeLibrary::remove(const std::string &id)
 		save();
 	}
 	return removed;
+}
+
+std::string ThemeLibrary::assetsDir() const
+{
+	std::string dir = path_;
+	size_t slash = dir.find_last_of("/\\");
+	dir = slash == std::string::npos ? std::string(".") : dir.substr(0, slash);
+	return dir + "/theme-assets";
+}
+
+std::string ThemeLibrary::resolveAsset(const std::string &ref) const
+{
+	static const std::string prefix = "theme-assets/";
+	if (ref.compare(0, prefix.size(), prefix) == 0)
+		return assetsDir() + "/" + ref.substr(prefix.size());
+	return ref;
 }
 
 uint64_t ThemeLibrary::revision() const

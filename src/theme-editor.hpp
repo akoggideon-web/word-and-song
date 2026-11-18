@@ -44,6 +44,10 @@ private:
 	void reject() override;
 	void setColorButton(QPushButton *b, long long abgr);
 	void pickColor(QPushButton *b, const char *key, bool alpha);
+	void chooseImage(const char *key);
+	void clearImage(const char *key);
+	void updateImageLabels();
+	QWidget *buildImagesBox(QWidget *parent);
 
 	obs_data *working_ = nullptr; // the look being edited
 	std::string currentId_;
@@ -80,6 +84,19 @@ private:
 	QSpinBox *padding_ = nullptr;
 	QSpinBox *radius_ = nullptr;
 	QSpinBox *fade_ = nullptr;
+
+	QLabel *bgLabel_ = nullptr;
+	QComboBox *bgFit_ = nullptr;
+	QLabel *logoLabel_ = nullptr;
+	QSpinBox *logoSize_ = nullptr;
+	QComboBox *logoPos_ = nullptr;
+	QLabel *frameLabel_ = nullptr;
+	QSpinBox *textX_ = nullptr;
+	QSpinBox *textY_ = nullptr;
+	QSpinBox *textW_ = nullptr;
+	QSpinBox *textH_ = nullptr;
+	QComboBox *textV_ = nullptr;
+	QWidget *areaRow_ = nullptr;
 };
 
 } // namespace ws

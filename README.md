@@ -69,9 +69,22 @@ in a display's properties). Pick a theme on the left and change its style, font,
 box, alignment and spacing with a live preview. Built-in themes are kept as they are: saving one
 makes your own copy. Saving a theme you made updates anything on screen that uses it, straight away.
 
+**Images in themes** (Theme Editor → Images):
+- **Box background** – a texture, photo or brand pattern inside the box. The box colour becomes a
+  tint over it (set its opacity to 0% to show the image untouched). Fill (crop) or stretch.
+- **Logo** – your church or series logo inside the box, left or right of the text.
+- **Designed graphic** – import a full-frame lower-third design (e.g. a 1920×1080 PNG from Canva or
+  Photoshop, transparent where the video should show) and set the **text area** to where the words
+  go; the preview draws it as a dashed box. Scripture, lyrics and names flow into that spot and
+  shrink to fit.
+
+Imported images are copied into the plugin's `theme-assets` folder, so themes keep working if the
+original file is moved or deleted.
+
 Styles: **Card** (rounded box), **Full-width bar** (edge-to-edge with an accent stripe),
 **Tag on top** (reference in a coloured tab), **Split panel** (reference in a coloured side panel),
-**Text only** (no box, outlined text — great over motion backgrounds).
+**Text only** (no box, outlined text — great over motion backgrounds), **Designed graphic**
+(your own image, see above).
 
 **Per-display adjustments** (display properties, work with any theme): *Size on this display* and
 *Move up / down*. Sizes are designed for 1080p and scale automatically for 720p or 4K canvases.
