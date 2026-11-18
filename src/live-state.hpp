@@ -6,12 +6,14 @@
 
 namespace ws {
 
-enum class ContentKind { None, Scripture, Lyrics };
+enum class ContentKind { None, Scripture, Lyrics, Card, Graphic };
 
 struct LiveContent {
 	ContentKind kind = ContentKind::None;
-	std::string title; // "John 3:16 (KJV)" or song section, may be empty
-	std::string body;  // verse text or lyric lines ('\n' separated)
+	std::string title;     // "John 3:16 (KJV)", song section, or a card's small line
+	std::string body;      // verse text, lyric lines ('\n' separated), or a card's main line
+	std::string themeId;   // theme chosen in the dock for this content (may be empty)
+	std::string imagePath; // Graphic only: image file to show full frame
 	bool visible = false;
 };
 

@@ -20,6 +20,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "dock.hpp"
 #include "live-state.hpp"
 #include "lower-third-source.hpp"
+#include "themes.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs-module.h>
@@ -109,6 +110,7 @@ bool obs_module_load(void)
 					  configDir + QStringLiteral("/bibles"));
 	bfree(bundled);
 	bfree(config);
+	ws::ThemeLibrary::instance().load((configDir + QStringLiteral("/themes.json")).toStdString());
 
 	auto *main = static_cast<QMainWindow *>(obs_frontend_get_main_window());
 	auto *dock = new ws::WordSongDock(configDir, main);

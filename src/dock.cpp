@@ -4,6 +4,7 @@
 #include "listener.hpp"
 #include "lower-third-source.hpp"
 #include "reference-parser.hpp"
+#include "themes.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs-module.h>
@@ -39,10 +40,18 @@
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QImageReader>
+#include <QPixmap>
+#include <QPainter>
+#include <QIcon>
+#include <QJsonArray>
+#include <QFileInfo>
 
 #include <algorithm>
+#include <cstring>
 
 namespace ws {
+static QPixmap thumbnail(const QString &path, const QSize &box);
 namespace {
 
 constexpr int RoleBook = Qt::UserRole;
@@ -121,7 +130,10 @@ WordSongDock::WordSongDock(const QString &configDir, QWidget *parent)
 	tabs_ = new QTabWidget(this);
 	tabs_->addTab(buildScriptureTab(), T("Tab.Scripture"));
 	tabs_->addTab(buildLyricsTab(), T("Tab.Lyrics"));
+	tabs_->addTab(buildCardsTab(), T("Tab.Cards"));
+	tabs_->addTab(buildGraphicsTab(), T("Tab.Graphics"));
 	tabs_->addTab(buildListenTab(), T("Tab.Listen"));
+	tabs_->setUsesScrollButtons(true);
 	connect(tabs_, &QTabWidget::currentChanged, this, [this](int i) {
 		// The preview follows the tab you are working in.
 		if (i == 0) {
@@ -130,6 +142,12 @@ WordSongDock::WordSongDock(const QString &configDir, QWidget *parent)
 		} else if (i == 1) {
 			mode_ = Mode::Lyrics;
 			onSlideSelection();
+		} else if (i == 2) {
+			mode_ = Mode::Cards;
+			previewCard();
+		} else if (i == 3) {
+			mode_ = Mode::Graphics;
+			previewGraphic(graphicsList_->currentRow());
 		}
 	});
 	root->addWidget(tabs_, 1);
@@ -177,6 +195,10 @@ WordSongDock::WordSongDock(const QString &configDir, QWidget *parent)
 	// before anyone touches the dock.
 	if (mode_ == Mode::Lyrics)
 		onSlideSelection();
+	else if (mode_ == Mode::Cards)
+		previewCard();
+	else if (mode_ == Mode::Graphics)
+		previewGraphic(graphicsList_->currentRow());
 	else
 		onVerseSelection();
 	updateLiveLabel();
@@ -213,6 +235,9 @@ void WordSongDock::buildMenu(QToolButton *button)
 	menu->addSeparator();
 	menu->addAction(T("Menu.ImportBible"), this, [this] { importTranslation(); });
 	menu->addAction(T("Menu.ImportSongs"), this, [this] { importSongs(); });
+	menu->addSeparator();
+	menu->addAction(T("Menu.SaveTheme"), this, [this] { saveLookAsTheme(); });
+	menu->addAction(T("Menu.DeleteTheme"), this, [this] { deleteTheme(); });
 	menu->addSeparator();
 	menu->addAction(T("Menu.OpenDataFolder"), this,
 			[this] { QDesktopServices::openUrl(QUrl::fromLocalFile(configDir_)); });
@@ -259,6 +284,10 @@ QWidget *WordSongDock::buildScriptureTab()
 	row2->addWidget(bookCombo_, 1);
 	row2->addWidget(chapterCombo_);
 	row2->addWidget(showTranslation_);
+	themeScripture_ = makeThemeCombo(w, "midnight");
+	connect(themeScripture_, &QComboBox::currentIndexChanged, this,
+		[this] { onThemeChanged(ContentKind::Scripture); });
+	row2->addWidget(themeScripture_);
 	v->addLayout(row2);
 	v->addWidget(verseList_, 1);
 
@@ -428,6 +457,7 @@ LiveContent WordSongDock::scriptureContent(const std::vector<const Verse *> &ver
 		return c;
 	c.kind = ContentKind::Scripture;
 	c.visible = true;
+	c.themeId = themeFor(ContentKind::Scripture);
 	const Verse *a = verses.front();
 	const Verse *z = verses.back();
 	Reference r{a->book, a->chapter, a->verse, a->chapter == z->chapter ? z->verse : a->verse};
@@ -567,6 +597,9 @@ QWidget *WordSongDock::buildLyricsTab()
 	bar->addWidget(removeBtn);
 	bar->addStretch(1);
 	bar->addWidget(linesPerSlide_);
+	themeLyrics_ = makeThemeCombo(w, "lyrics-bold");
+	connect(themeLyrics_, &QComboBox::currentIndexChanged, this, [this] { onThemeChanged(ContentKind::Lyrics); });
+	bar->addWidget(themeLyrics_);
 	v->addLayout(bar);
 
 	auto *split = new QSplitter(Qt::Vertical, w);
@@ -684,6 +717,7 @@ void WordSongDock::previewSlide(int index)
 	LiveContent c;
 	c.kind = ContentKind::Lyrics;
 	c.visible = true;
+	c.themeId = themeFor(ContentKind::Lyrics);
 	c.title = slides_[(size_t)index].label;
 	c.body = slides_[(size_t)index].text;
 	setPreview(c);
@@ -1123,6 +1157,7 @@ void WordSongDock::handleWorship(const QString &text)
 	LiveContent c;
 	c.kind = ContentKind::Lyrics;
 	c.visible = true;
+	c.themeId = themeFor(ContentKind::Lyrics);
 	c.title = sl.label;
 	c.body = sl.text;
 	QString label =
@@ -1168,15 +1203,26 @@ void WordSongDock::setPreview(const LiveContent &content)
 	preview_ = content;
 	if (!previewTitle_)
 		return;
-	bool has = content.kind != ContentKind::None && !content.body.empty();
-	previewTitle_->setText(has ? QString::fromStdString(content.title) : T("Preview.Nothing"));
-	previewBody_->setText(has ? elide(QString::fromStdString(content.body), 260) : QString());
+	const bool graphic = content.kind == ContentKind::Graphic && !content.imagePath.empty();
+	bool has = graphic || (content.kind != ContentKind::None && !content.body.empty());
+	if (graphic) {
+		previewTitle_->setText(QFileInfo(QString::fromStdString(content.imagePath)).fileName());
+		previewBody_->setPixmap(thumbnail(QString::fromStdString(content.imagePath), QSize(240, 70)));
+	} else {
+		previewTitle_->setText(has ? QString::fromStdString(content.title) : T("Preview.Nothing"));
+		if (content.kind == ContentKind::Card && has && content.title.empty())
+			previewTitle_->setText(T("Cards.Preview"));
+		previewBody_->setPixmap(QPixmap());
+		previewBody_->setText(has ? elide(QString::fromStdString(content.body), 260) : QString());
+	}
 	showButton_->setEnabled(has);
 }
 
 void WordSongDock::showPreview()
 {
-	if (preview_.kind == ContentKind::None || preview_.body.empty())
+	if (preview_.kind == ContentKind::None)
+		return;
+	if (preview_.body.empty() && preview_.imagePath.empty())
 		return;
 	goLive(preview_);
 }
@@ -1201,26 +1247,56 @@ void WordSongDock::clearScreen()
 	updateLiveLabel();
 }
 
+static ContentKind kindForMode(int mode)
+{
+	static const ContentKind kinds[] = {ContentKind::Scripture, ContentKind::Lyrics, ContentKind::Card,
+					    ContentKind::Graphic};
+	return kinds[std::clamp(mode, 0, 3)];
+}
+
+void WordSongDock::stepList(QListWidget *list, int delta)
+{
+	int row = list->currentRow() + delta;
+	if (row >= 0 && row < list->count() && (list->item(row)->flags() & Qt::ItemIsEnabled))
+		list->setCurrentRow(row);
+}
+
 void WordSongDock::next()
 {
-	if (mode_ == Mode::Lyrics)
+	switch (mode_) {
+	case Mode::Lyrics:
 		stepSlide(1);
-	else
+		break;
+	case Mode::Cards:
+		stepList(cardList_, 1);
+		break;
+	case Mode::Graphics:
+		stepList(graphicsList_, 1);
+		break;
+	default:
 		stepVerse(1);
+	}
 	// If something of this kind is on screen, follow along live.
-	if (live_.visible && ((mode_ == Mode::Lyrics && live_.kind == ContentKind::Lyrics) ||
-			      (mode_ == Mode::Scripture && live_.kind == ContentKind::Scripture)))
+	if (live_.visible && live_.kind == kindForMode((int)mode_))
 		showPreview();
 }
 
 void WordSongDock::previous()
 {
-	if (mode_ == Mode::Lyrics)
+	switch (mode_) {
+	case Mode::Lyrics:
 		stepSlide(-1);
-	else
+		break;
+	case Mode::Cards:
+		stepList(cardList_, -1);
+		break;
+	case Mode::Graphics:
+		stepList(graphicsList_, -1);
+		break;
+	default:
 		stepVerse(-1);
-	if (live_.visible && ((mode_ == Mode::Lyrics && live_.kind == ContentKind::Lyrics) ||
-			      (mode_ == Mode::Scripture && live_.kind == ContentKind::Scripture)))
+	}
+	if (live_.visible && live_.kind == kindForMode((int)mode_))
 		showPreview();
 }
 
@@ -1231,8 +1307,10 @@ void WordSongDock::updateLiveLabel()
 		clearButton_->setEnabled(false);
 		return;
 	}
-	QString what = live_.title.empty() ? elide(QString::fromStdString(live_.body), 40)
-					   : QString::fromStdString(live_.title);
+	QString what =
+		live_.kind == ContentKind::Graphic ? QFileInfo(QString::fromStdString(live_.imagePath)).fileName()
+		: live_.kind == ContentKind::Card || live_.title.empty() ? elide(QString::fromStdString(live_.body), 40)
+									 : QString::fromStdString(live_.title);
 	liveLabel_->setText(QStringLiteral("<span style='color:#e5484d;font-weight:bold'>● %1</span> %2")
 				    .arg(T("Live.OnScreen"), what.toHtmlEscaped()));
 	clearButton_->setEnabled(true);
@@ -1257,17 +1335,9 @@ void WordSongDock::addDisplayToScene(bool fullScreen)
 	}
 	obs_data_t *settings = obs_data_create();
 	if (fullScreen) {
+		// Follows the dock's themes, scaled up; name cards stay on the lower third.
 		obs_data_set_int(settings, "layout", 1);
-		obs_data_set_int(settings, "align", 1);
-		obs_data_set_int(settings, "box_color", 0xE6000000);
-		obs_data_set_int(settings, "radius", 0);
-		obs_data_set_int(settings, "margin", 0);
-		obs_data_set_int(settings, "padding", 120);
-		obs_data_t *font = obs_data_create();
-		obs_data_set_int(font, "size", 72);
-		obs_data_set_obj(settings, "font", font);
-		obs_data_release(font);
-		obs_data_set_int(settings, "title_size", 40);
+		obs_data_set_bool(settings, "show_cards", false);
 	}
 	obs_source_t *src = obs_source_create(kDisplaySourceId, name.toUtf8().constData(), settings, nullptr);
 	obs_data_release(settings);
@@ -1276,6 +1346,389 @@ void WordSongDock::addDisplayToScene(bool fullScreen)
 		obs_source_release(src);
 	}
 	obs_source_release(sceneSource);
+}
+
+// ---------------------------------------------------------------------------
+// Themes
+
+QComboBox *WordSongDock::makeThemeCombo(QWidget *parent, const char *defaultId)
+{
+	auto *combo = new QComboBox(parent);
+	combo->setToolTip(T("Theme.Tip"));
+	combo->setProperty("defaultTheme", QString::fromLatin1(defaultId));
+	combo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+	for (const ThemeEntry &t : ThemeLibrary::instance().list())
+		combo->addItem(QString::fromStdString(t.name), QString::fromStdString(t.id));
+	int i = combo->findData(QString::fromLatin1(defaultId));
+	combo->setCurrentIndex(std::max(0, i));
+	return combo;
+}
+
+void WordSongDock::refreshThemeCombos()
+{
+	const auto themes = ThemeLibrary::instance().list();
+	for (QComboBox *combo : {themeScripture_, themeLyrics_, themeCards_}) {
+		QString keep = combo->currentData().toString();
+		QSignalBlocker b(combo);
+		combo->clear();
+		for (const ThemeEntry &t : themes)
+			combo->addItem(QString::fromStdString(t.name), QString::fromStdString(t.id));
+		int i = combo->findData(keep);
+		if (i < 0)
+			i = combo->findData(combo->property("defaultTheme").toString());
+		combo->setCurrentIndex(std::max(0, i));
+	}
+}
+
+std::string WordSongDock::themeFor(ContentKind kind) const
+{
+	QComboBox *combo = kind == ContentKind::Scripture ? themeScripture_
+			   : kind == ContentKind::Lyrics  ? themeLyrics_
+			   : kind == ContentKind::Card    ? themeCards_
+							  : nullptr;
+	return combo ? combo->currentData().toString().toStdString() : std::string();
+}
+
+void WordSongDock::onThemeChanged(ContentKind kind)
+{
+	saveSettings();
+	// Refresh the preview, and restyle what's on screen straight away (like ProPresenter).
+	if (mode_ == Mode::Scripture)
+		onVerseSelection();
+	else if (mode_ == Mode::Lyrics)
+		onSlideSelection();
+	else if (mode_ == Mode::Cards)
+		previewCard();
+	if (live_.visible && live_.kind == kind) {
+		live_.themeId = themeFor(kind);
+		setLive(live_);
+	}
+}
+
+void WordSongDock::saveLookAsTheme()
+{
+	QStringList displays;
+	obs_enum_sources(
+		[](void *param, obs_source_t *src) {
+			if (strcmp(obs_source_get_unversioned_id(src), kDisplaySourceId) == 0)
+				static_cast<QStringList *>(param)->append(QString::fromUtf8(obs_source_get_name(src)));
+			return true;
+		},
+		&displays);
+	if (displays.isEmpty()) {
+		QMessageBox::information(this, T("Theme.SaveTitle"), T("Theme.NoDisplays"));
+		return;
+	}
+	bool ok = false;
+	QString display = displays.size() == 1 ? displays.first()
+					       : QInputDialog::getItem(this, T("Theme.SaveTitle"),
+								       T("Theme.PickDisplay"), displays, 0, false, &ok);
+	if (displays.size() > 1 && !ok)
+		return;
+	QString name =
+		QInputDialog::getText(this, T("Theme.SaveTitle"), T("Theme.Name"), QLineEdit::Normal, QString(), &ok)
+			.trimmed();
+	if (!ok || name.isEmpty())
+		return;
+	obs_source_t *src = obs_get_source_by_name(display.toUtf8().constData());
+	if (!src)
+		return;
+	obs_data_t *settings = obs_source_get_settings(src);
+	std::string look = ThemeLibrary::extractLook(settings);
+	obs_data_release(settings);
+	obs_source_release(src);
+	ThemeLibrary::instance().addOrReplace(name.toStdString(), look);
+	refreshThemeCombos();
+	QMessageBox::information(this, T("Theme.SaveTitle"), T("Theme.Saved").arg(name));
+}
+
+void WordSongDock::deleteTheme()
+{
+	QStringList names, ids;
+	for (const ThemeEntry &t : ThemeLibrary::instance().list())
+		if (!t.builtIn) {
+			names << QString::fromStdString(t.name);
+			ids << QString::fromStdString(t.id);
+		}
+	if (names.isEmpty()) {
+		QMessageBox::information(this, T("Menu.DeleteTheme"), T("Theme.NoneToDelete"));
+		return;
+	}
+	bool ok = false;
+	QString name = QInputDialog::getItem(this, T("Menu.DeleteTheme"), T("Theme.PickDelete"), names, 0, false, &ok);
+	if (!ok)
+		return;
+	ThemeLibrary::instance().remove(ids[names.indexOf(name)].toStdString());
+	refreshThemeCombos();
+	onThemeChanged(ContentKind::None);
+}
+
+// ---------------------------------------------------------------------------
+// Cards (speaker names, sermon points, any quick text)
+
+QWidget *WordSongDock::buildCardsTab()
+{
+	auto *w = new QWidget(this);
+	auto *v = new QVBoxLayout(w);
+	v->setContentsMargins(4, 6, 4, 4);
+
+	auto *form = new QFormLayout();
+	cardHeading_ = new QLineEdit(w);
+	cardHeading_->setPlaceholderText(T("Cards.HeadingHint"));
+	cardHeading_->setClearButtonEnabled(true);
+	cardSub_ = new QLineEdit(w);
+	cardSub_->setPlaceholderText(T("Cards.SubHint"));
+	cardSub_->setClearButtonEnabled(true);
+	form->addRow(T("Cards.Heading"), cardHeading_);
+	form->addRow(T("Cards.Sub"), cardSub_);
+	v->addLayout(form);
+
+	auto *bar = new QHBoxLayout();
+	auto *save = new QToolButton(w);
+	save->setText(T("Cards.Save"));
+	save->setToolTip(T("Cards.SaveTip"));
+	connect(save, &QToolButton::clicked, this, &WordSongDock::saveCard);
+	auto *remove = new QToolButton(w);
+	remove->setText(QStringLiteral("−"));
+	remove->setToolTip(T("Cards.RemoveTip"));
+	connect(remove, &QToolButton::clicked, this, [this] {
+		delete cardList_->takeItem(cardList_->currentRow());
+		saveCards();
+	});
+	themeCards_ = makeThemeCombo(w, "gold-bar");
+	connect(themeCards_, &QComboBox::currentIndexChanged, this, [this] { onThemeChanged(ContentKind::Card); });
+	bar->addWidget(save);
+	bar->addWidget(remove);
+	bar->addStretch(1);
+	bar->addWidget(themeCards_);
+	v->addLayout(bar);
+
+	cardList_ = new QListWidget(w);
+	cardList_->setDragDropMode(QAbstractItemView::InternalMove);
+	cardList_->setToolTip(T("Cards.ListTip"));
+	cardList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	v->addWidget(cardList_, 1);
+
+	connect(cardHeading_, &QLineEdit::textEdited, this, [this] { previewCard(); });
+	connect(cardSub_, &QLineEdit::textEdited, this, [this] { previewCard(); });
+	connect(cardHeading_, &QLineEdit::returnPressed, this, [this] {
+		previewCard();
+		showPreview();
+	});
+	connect(cardSub_, &QLineEdit::returnPressed, this, [this] {
+		previewCard();
+		showPreview();
+	});
+	connect(cardList_, &QListWidget::currentRowChanged, this, [this](int row) {
+		if (row < 0)
+			return;
+		QListWidgetItem *it = cardList_->item(row);
+		cardHeading_->setText(it->data(Qt::UserRole).toString());
+		cardSub_->setText(it->data(Qt::UserRole + 1).toString());
+		previewCard();
+	});
+	connect(cardList_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *) { showPreview(); });
+	connect(cardList_->model(), &QAbstractItemModel::rowsMoved, this, [this] { saveCards(); });
+	loadCards();
+	return w;
+}
+
+void WordSongDock::previewCard()
+{
+	if (mode_ != Mode::Cards)
+		return;
+	LiveContent c;
+	c.body = cardHeading_->text().trimmed().toStdString();
+	c.title = cardSub_->text().trimmed().toStdString();
+	if (!c.body.empty()) {
+		c.kind = ContentKind::Card;
+		c.visible = true;
+		c.themeId = themeFor(ContentKind::Card);
+	}
+	setPreview(c);
+}
+
+static QListWidgetItem *cardItem(QListWidget *list, const QString &heading, const QString &sub)
+{
+	auto *it = new QListWidgetItem(sub.isEmpty() ? heading : QStringLiteral("%1  —  %2").arg(heading, sub), list);
+	it->setData(Qt::UserRole, heading);
+	it->setData(Qt::UserRole + 1, sub);
+	return it;
+}
+
+void WordSongDock::saveCard()
+{
+	QString heading = cardHeading_->text().trimmed(), sub = cardSub_->text().trimmed();
+	if (heading.isEmpty())
+		return;
+	for (int i = 0; i < cardList_->count(); i++) {
+		auto *it = cardList_->item(i);
+		if (it->data(Qt::UserRole).toString() == heading && it->data(Qt::UserRole + 1).toString() == sub) {
+			cardList_->setCurrentRow(i);
+			return;
+		}
+	}
+	QSignalBlocker b(cardList_);
+	cardList_->setCurrentItem(cardItem(cardList_, heading, sub));
+	saveCards();
+}
+
+void WordSongDock::loadCards()
+{
+	QFile f(QDir(configDir_).filePath(QStringLiteral("cards.json")));
+	if (!f.open(QIODevice::ReadOnly))
+		return;
+	for (const QJsonValue &v : QJsonDocument::fromJson(f.readAll()).array()) {
+		QJsonObject o = v.toObject();
+		cardItem(cardList_, o.value(QStringLiteral("heading")).toString(),
+			 o.value(QStringLiteral("sub")).toString());
+	}
+}
+
+void WordSongDock::saveCards() const
+{
+	QJsonArray arr;
+	for (int i = 0; i < cardList_->count(); i++) {
+		auto *it = cardList_->item(i);
+		arr.append(QJsonObject{{QStringLiteral("heading"), it->data(Qt::UserRole).toString()},
+				       {QStringLiteral("sub"), it->data(Qt::UserRole + 1).toString()}});
+	}
+	QDir().mkpath(configDir_);
+	QSaveFile f(QDir(configDir_).filePath(QStringLiteral("cards.json")));
+	if (f.open(QIODevice::WriteOnly)) {
+		f.write(QJsonDocument(arr).toJson());
+		f.commit();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Graphics (designed slides and images)
+
+// Thumbnails sit on grey so transparent PNG lower thirds are visible in the dock.
+static QPixmap thumbnail(const QString &path, const QSize &box)
+{
+	QImageReader reader(path);
+	reader.setAutoTransform(true);
+	QSize sz = reader.size();
+	if (sz.isValid())
+		reader.setScaledSize(sz.scaled(box, Qt::KeepAspectRatio));
+	QImage img = reader.read();
+	if (img.isNull())
+		return {};
+	QImage out(img.size(), QImage::Format_ARGB32_Premultiplied);
+	out.fill(QColor(85, 85, 90));
+	QPainter p(&out);
+	p.drawImage(0, 0, img);
+	p.end();
+	return QPixmap::fromImage(out);
+}
+
+static QListWidgetItem *graphicItem(QListWidget *list, const QString &path)
+{
+	QFileInfo fi(path);
+	auto *it = new QListWidgetItem(fi.completeBaseName(), list);
+	it->setData(Qt::UserRole, path);
+	it->setToolTip(path);
+	QPixmap thumb = thumbnail(path, list->iconSize());
+	if (thumb.isNull()) {
+		it->setText(fi.completeBaseName() + QStringLiteral("  ") + T("Graphics.Missing"));
+		it->setFlags(it->flags() & ~Qt::ItemIsEnabled);
+	} else {
+		it->setIcon(QIcon(thumb));
+	}
+	return it;
+}
+
+QWidget *WordSongDock::buildGraphicsTab()
+{
+	auto *w = new QWidget(this);
+	auto *v = new QVBoxLayout(w);
+	v->setContentsMargins(4, 6, 4, 4);
+
+	auto *bar = new QHBoxLayout();
+	auto *add = new QToolButton(w);
+	add->setText(T("Graphics.Add"));
+	connect(add, &QToolButton::clicked, this, &WordSongDock::addGraphics);
+	auto *remove = new QToolButton(w);
+	remove->setText(QStringLiteral("−"));
+	remove->setToolTip(T("Graphics.RemoveTip"));
+	connect(remove, &QToolButton::clicked, this, [this] {
+		delete graphicsList_->takeItem(graphicsList_->currentRow());
+		saveGraphics();
+	});
+	bar->addWidget(add);
+	bar->addWidget(remove);
+	bar->addStretch(1);
+	v->addLayout(bar);
+
+	graphicsList_ = new QListWidget(w);
+	graphicsList_->setIconSize(QSize(112, 63));
+	graphicsList_->setDragDropMode(QAbstractItemView::InternalMove);
+	graphicsList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	graphicsList_->setSpacing(2);
+	v->addWidget(graphicsList_, 1);
+
+	auto *hint = new QLabel(T("Graphics.Hint"), w);
+	hint->setWordWrap(true);
+	hint->setStyleSheet(QStringLiteral("color:#999;"));
+	v->addWidget(hint);
+
+	connect(graphicsList_, &QListWidget::currentRowChanged, this, [this](int row) { previewGraphic(row); });
+	connect(graphicsList_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *) { showPreview(); });
+	connect(graphicsList_, &QListWidget::itemActivated, this, [this](QListWidgetItem *) { showPreview(); });
+	connect(graphicsList_->model(), &QAbstractItemModel::rowsMoved, this, [this] { saveGraphics(); });
+	loadGraphics();
+	return w;
+}
+
+void WordSongDock::addGraphics()
+{
+	QStringList files = QFileDialog::getOpenFileNames(
+		this, T("Graphics.Add"), QString(),
+		T("Graphics.Filter") + QStringLiteral(" (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tif *.tiff)"));
+	if (files.isEmpty())
+		return;
+	QListWidgetItem *last = nullptr;
+	for (const QString &f : files)
+		last = graphicItem(graphicsList_, f);
+	saveGraphics();
+	if (last)
+		graphicsList_->setCurrentItem(last);
+}
+
+void WordSongDock::previewGraphic(int row)
+{
+	if (mode_ != Mode::Graphics)
+		return;
+	LiveContent c;
+	if (row >= 0 && row < graphicsList_->count() && (graphicsList_->item(row)->flags() & Qt::ItemIsEnabled)) {
+		c.kind = ContentKind::Graphic;
+		c.visible = true;
+		c.imagePath = graphicsList_->item(row)->data(Qt::UserRole).toString().toStdString();
+	}
+	setPreview(c);
+}
+
+void WordSongDock::loadGraphics()
+{
+	QFile f(QDir(configDir_).filePath(QStringLiteral("graphics.json")));
+	if (!f.open(QIODevice::ReadOnly))
+		return;
+	for (const QJsonValue &v : QJsonDocument::fromJson(f.readAll()).array())
+		graphicItem(graphicsList_, v.toString());
+}
+
+void WordSongDock::saveGraphics() const
+{
+	QJsonArray arr;
+	for (int i = 0; i < graphicsList_->count(); i++)
+		arr.append(graphicsList_->item(i)->data(Qt::UserRole).toString());
+	QDir().mkpath(configDir_);
+	QSaveFile f(QDir(configDir_).filePath(QStringLiteral("graphics.json")));
+	if (f.open(QIODevice::WriteOnly)) {
+		f.write(QJsonDocument(arr).toJson());
+		f.commit();
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1301,7 +1754,17 @@ void WordSongDock::loadSettings()
 		listenMode_->setCurrentIndex(std::clamp(o.value(QStringLiteral("listenMode")).toInt(0), 0, 1));
 		autoShow_->setChecked(o.value(QStringLiteral("autoShow")).toBool(false));
 	}
-	tabs_->setCurrentIndex(std::clamp(o.value(QStringLiteral("tab")).toInt(0), 0, 2));
+	auto pickTheme = [&](QComboBox *combo, const char *key) {
+		int i = combo->findData(o.value(QString::fromLatin1(key)).toString());
+		if (i >= 0) {
+			QSignalBlocker b(combo);
+			combo->setCurrentIndex(i);
+		}
+	};
+	pickTheme(themeScripture_, "themeScripture");
+	pickTheme(themeLyrics_, "themeLyrics");
+	pickTheme(themeCards_, "themeCards");
+	tabs_->setCurrentIndex(std::clamp(o.value(QStringLiteral("tab")).toInt(0), 0, tabs_->count() - 1));
 }
 
 void WordSongDock::saveSettings() const
@@ -1310,7 +1773,10 @@ void WordSongDock::saveSettings() const
 		      {QStringLiteral("showTranslation"), showTranslation_->isChecked()},
 		      {QStringLiteral("book"), book_},
 		      {QStringLiteral("chapter"), chapter_},
-		      {QStringLiteral("tab"), tabs_->currentIndex()}};
+		      {QStringLiteral("tab"), tabs_->currentIndex()},
+		      {QStringLiteral("themeScripture"), themeScripture_->currentData().toString()},
+		      {QStringLiteral("themeLyrics"), themeLyrics_->currentData().toString()},
+		      {QStringLiteral("themeCards"), themeCards_->currentData().toString()}};
 	if (audioSource_) {
 		o.insert(QStringLiteral("audioSource"), audioSource_->currentText());
 		o.insert(QStringLiteral("model"), modelPath_->text());

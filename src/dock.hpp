@@ -63,7 +63,31 @@ private:
 	QWidget *buildScriptureTab();
 	QWidget *buildLyricsTab();
 	QWidget *buildListenTab();
+	QWidget *buildCardsTab();
+	QWidget *buildGraphicsTab();
 	void buildMenu(QToolButton *button);
+
+	// Themes
+	QComboBox *makeThemeCombo(QWidget *parent, const char *settingKey);
+	void refreshThemeCombos();
+	std::string themeFor(ContentKind kind) const;
+	void onThemeChanged(ContentKind kind);
+	void saveLookAsTheme();
+	void deleteTheme();
+
+	// Cards
+	void previewCard();
+	void saveCard();
+	void loadCards();
+	void saveCards() const;
+
+	// Graphics
+	void addGraphics();
+	void previewGraphic(int row);
+	void loadGraphics();
+	void saveGraphics() const;
+
+	void stepList(QListWidget *list, int delta);
 
 	// Scripture
 	void loadChapter(int book, int chapter, int selectStart = 0, int selectEnd = 0);
@@ -106,7 +130,7 @@ private:
 
 	LiveContent preview_;
 	LiveContent live_;
-	enum class Mode { Scripture, Lyrics } mode_ = Mode::Scripture;
+	enum class Mode { Scripture, Lyrics, Cards, Graphics } mode_ = Mode::Scripture;
 
 	// scripture state
 	int book_ = 43, chapter_ = 3;
@@ -143,6 +167,15 @@ private:
 	QComboBox *chapterCombo_ = nullptr;
 	QListWidget *verseList_ = nullptr;
 	QCheckBox *showTranslation_ = nullptr;
+
+	QComboBox *themeScripture_ = nullptr;
+	QComboBox *themeLyrics_ = nullptr;
+	QComboBox *themeCards_ = nullptr;
+
+	QLineEdit *cardHeading_ = nullptr;
+	QLineEdit *cardSub_ = nullptr;
+	QListWidget *cardList_ = nullptr;
+	QListWidget *graphicsList_ = nullptr;
 
 	QListWidget *setlist_ = nullptr;
 	QListWidget *slideList_ = nullptr;

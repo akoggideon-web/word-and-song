@@ -11,8 +11,16 @@ reads them and follows along with worship lyrics.
 - **Listen** – picks up "John chapter three verse sixteen", "Romans 8:28", or a verse being quoted
   without a reference. In Worship mode it tracks which slide is being sung. Detections wait for
   you to confirm unless you turn on auto-show. Nothing leaves the computer.
-- **Display source** – a lower third, full-screen or top-of-screen card with fade, auto-shrinking
-  text, your fonts and colours. Use one source for scripture and another for lyrics if you like.
+- **Cards** – speaker names and titles, sermon points, or any quick text. Type it live or keep a
+  saved list for the service.
+- **Graphics** – a playlist of your designed images (PNG/JPG from Canva, Photoshop, etc.). Full-frame
+  PNGs with transparency line up exactly, so designed lower thirds work as-is.
+- **Themes** – like ProPresenter: pick a theme per tab (Scripture, Lyrics, Cards) and what's on screen
+  restyles instantly. Built in: Midnight Card, Gold Bar, Clean White, Red Tag, Blue Split,
+  Minimal (text only), Lyrics – Bold Centered, Teal Bar. Save your own from any display.
+- **Display source** – a lower third, full-screen or top-of-screen display with fades and
+  auto-shrinking text. Each display chooses what it shows (scripture / lyrics / cards / graphics),
+  so a livestream lower third and a full-screen projector output can run side by side.
 - **Hotkeys** (Settings → Hotkeys): Show preview, Clear, Next, Previous — works with a Stream Deck.
 
 ---
@@ -50,6 +58,20 @@ doesn't show the plugin, run
 
 Then in OBS: **Docks → Word and Song**. From the dock's **⋯** menu choose
 *Add lower-third display to current scene* (and/or the full-screen one).
+
+## Themes
+
+Each tab's theme picker sets the look for that kind of content, and any display set to
+**Follow the dock's themes** (the default) uses it. A full-screen display scales the theme up.
+
+To make your own theme: add a display (⋯ menu), open its properties, set **Theme** to *Use this
+display's own look*, style it (style family, font, colours, box, accent, spacing), then choose
+**⋯ → Save a display's look as a theme…**. Your theme then appears in every tab's picker. Set the
+display back to *Follow the dock's themes* afterwards.
+
+Theme styles: **Card** (rounded box), **Full-width bar** (edge-to-edge with an accent stripe),
+**Tag on top** (reference in a coloured tab), **Split panel** (reference in a coloured side panel),
+**Text only** (no box, outlined text — great over motion backgrounds).
 
 ## Speech detection setup
 

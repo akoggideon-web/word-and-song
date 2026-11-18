@@ -42,6 +42,7 @@ target_sources(
     src/live-state.cpp
     src/lower-third-source.cpp
     src/songs.cpp
+    src/themes.cpp
     src/dock.cpp
     src/listener.cpp
     src/matcher.cpp
