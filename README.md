@@ -64,14 +64,17 @@ Then in OBS: **Docks → Word and Song**. From the dock's **⋯** menu choose
 Each tab's theme picker sets the look for that kind of content, and any display set to
 **Follow the dock's themes** (the default) uses it. A full-screen display scales the theme up.
 
-To make your own theme: add a display (⋯ menu), open its properties, set **Theme** to *Use this
-display's own look*, style it (style family, font, colours, box, accent, spacing), then choose
-**⋯ → Save a display's look as a theme…**. Your theme then appears in every tab's picker. Set the
-display back to *Follow the dock's themes* afterwards.
+**Theme Editor** – click **✎** next to any theme picker (or **⋯ → Theme editor…**, or **Edit themes…**
+in a display's properties). Pick a theme on the left and change its style, font, sizes, colours,
+box, alignment and spacing with a live preview. Built-in themes are kept as they are: saving one
+makes your own copy. Saving a theme you made updates anything on screen that uses it, straight away.
 
-Theme styles: **Card** (rounded box), **Full-width bar** (edge-to-edge with an accent stripe),
+Styles: **Card** (rounded box), **Full-width bar** (edge-to-edge with an accent stripe),
 **Tag on top** (reference in a coloured tab), **Split panel** (reference in a coloured side panel),
 **Text only** (no box, outlined text — great over motion backgrounds).
+
+**Per-display adjustments** (display properties, work with any theme): *Size on this display* and
+*Move up / down*. Sizes are designed for 1080p and scale automatically for 720p or 4K canvases.
 
 ## Speech detection setup
 

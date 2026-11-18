@@ -5,6 +5,7 @@
 #include "lower-third-source.hpp"
 #include "reference-parser.hpp"
 #include "themes.hpp"
+#include "theme-editor.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs-module.h>
@@ -51,6 +52,7 @@
 #include <cstring>
 
 namespace ws {
+static ContentKind kindForMode(int mode);
 static QPixmap thumbnail(const QString &path, const QSize &box);
 namespace {
 
@@ -208,6 +210,7 @@ WordSongDock::WordSongDock(const QString &configDir, QWidget *parent)
 	meterTimer_ = new QTimer(this);
 	connect(meterTimer_, &QTimer::timeout, this, &WordSongDock::tickMeter);
 	meterTimer_->start(100);
+	setEditThemesHandler([this] { openThemeEditor(kindForMode((int)mode_)); });
 }
 
 WordSongDock::~WordSongDock()
@@ -217,6 +220,7 @@ WordSongDock::~WordSongDock()
 
 void WordSongDock::shutdown()
 {
+	setEditThemesHandler(nullptr);
 	if (listener_)
 		listener_->stop();
 }
@@ -236,8 +240,7 @@ void WordSongDock::buildMenu(QToolButton *button)
 	menu->addAction(T("Menu.ImportBible"), this, [this] { importTranslation(); });
 	menu->addAction(T("Menu.ImportSongs"), this, [this] { importSongs(); });
 	menu->addSeparator();
-	menu->addAction(T("Menu.SaveTheme"), this, [this] { saveLookAsTheme(); });
-	menu->addAction(T("Menu.DeleteTheme"), this, [this] { deleteTheme(); });
+	menu->addAction(T("Menu.ThemeEditor"), this, [this] { openThemeEditor(kindForMode((int)mode_)); });
 	menu->addSeparator();
 	menu->addAction(T("Menu.OpenDataFolder"), this,
 			[this] { QDesktopServices::openUrl(QUrl::fromLocalFile(configDir_)); });
@@ -287,7 +290,7 @@ QWidget *WordSongDock::buildScriptureTab()
 	themeScripture_ = makeThemeCombo(w, "midnight");
 	connect(themeScripture_, &QComboBox::currentIndexChanged, this,
 		[this] { onThemeChanged(ContentKind::Scripture); });
-	row2->addWidget(themeScripture_);
+	row2->addWidget(withEditButton(themeScripture_, ContentKind::Scripture, w));
 	v->addLayout(row2);
 	v->addWidget(verseList_, 1);
 
@@ -599,7 +602,7 @@ QWidget *WordSongDock::buildLyricsTab()
 	bar->addWidget(linesPerSlide_);
 	themeLyrics_ = makeThemeCombo(w, "lyrics-bold");
 	connect(themeLyrics_, &QComboBox::currentIndexChanged, this, [this] { onThemeChanged(ContentKind::Lyrics); });
-	bar->addWidget(themeLyrics_);
+	bar->addWidget(withEditButton(themeLyrics_, ContentKind::Lyrics, w));
 	v->addLayout(bar);
 
 	auto *split = new QSplitter(Qt::Vertical, w);
@@ -1405,62 +1408,36 @@ void WordSongDock::onThemeChanged(ContentKind kind)
 	}
 }
 
-void WordSongDock::saveLookAsTheme()
+QWidget *WordSongDock::withEditButton(QComboBox *combo, ContentKind kind, QWidget *parent)
 {
-	QStringList displays;
-	obs_enum_sources(
-		[](void *param, obs_source_t *src) {
-			if (strcmp(obs_source_get_unversioned_id(src), kDisplaySourceId) == 0)
-				static_cast<QStringList *>(param)->append(QString::fromUtf8(obs_source_get_name(src)));
-			return true;
-		},
-		&displays);
-	if (displays.isEmpty()) {
-		QMessageBox::information(this, T("Theme.SaveTitle"), T("Theme.NoDisplays"));
-		return;
-	}
-	bool ok = false;
-	QString display = displays.size() == 1 ? displays.first()
-					       : QInputDialog::getItem(this, T("Theme.SaveTitle"),
-								       T("Theme.PickDisplay"), displays, 0, false, &ok);
-	if (displays.size() > 1 && !ok)
-		return;
-	QString name =
-		QInputDialog::getText(this, T("Theme.SaveTitle"), T("Theme.Name"), QLineEdit::Normal, QString(), &ok)
-			.trimmed();
-	if (!ok || name.isEmpty())
-		return;
-	obs_source_t *src = obs_get_source_by_name(display.toUtf8().constData());
-	if (!src)
-		return;
-	obs_data_t *settings = obs_source_get_settings(src);
-	std::string look = ThemeLibrary::extractLook(settings);
-	obs_data_release(settings);
-	obs_source_release(src);
-	ThemeLibrary::instance().addOrReplace(name.toStdString(), look);
-	refreshThemeCombos();
-	QMessageBox::information(this, T("Theme.SaveTitle"), T("Theme.Saved").arg(name));
+	auto *box = new QWidget(parent);
+	auto *h = new QHBoxLayout(box);
+	h->setContentsMargins(0, 0, 0, 0);
+	h->setSpacing(2);
+	h->addWidget(combo);
+	auto *edit = new QToolButton(box);
+	edit->setText(QStringLiteral("\u270E"));
+	edit->setToolTip(T("Theme.EditTip"));
+	connect(edit, &QToolButton::clicked, this, [this, kind] { openThemeEditor(kind); });
+	h->addWidget(edit);
+	return box;
 }
 
-void WordSongDock::deleteTheme()
+void WordSongDock::openThemeEditor(ContentKind kind)
 {
-	QStringList names, ids;
-	for (const ThemeEntry &t : ThemeLibrary::instance().list())
-		if (!t.builtIn) {
-			names << QString::fromStdString(t.name);
-			ids << QString::fromStdString(t.id);
-		}
-	if (names.isEmpty()) {
-		QMessageBox::information(this, T("Menu.DeleteTheme"), T("Theme.NoneToDelete"));
-		return;
-	}
-	bool ok = false;
-	QString name = QInputDialog::getItem(this, T("Menu.DeleteTheme"), T("Theme.PickDelete"), names, 0, false, &ok);
-	if (!ok)
-		return;
-	ThemeLibrary::instance().remove(ids[names.indexOf(name)].toStdString());
+	if (kind == ContentKind::Graphic || kind == ContentKind::None)
+		kind = ContentKind::Scripture;
+	ThemeEditor dlg(themeFor(kind), kind, this);
+	dlg.exec();
 	refreshThemeCombos();
-	onThemeChanged(ContentKind::None);
+	QComboBox *combo = kind == ContentKind::Lyrics ? themeLyrics_
+			   : kind == ContentKind::Card ? themeCards_
+						       : themeScripture_;
+	int i = combo->findData(QString::fromStdString(dlg.selectedTheme()));
+	if (i >= 0 && i != combo->currentIndex())
+		combo->setCurrentIndex(i); // restyles via onThemeChanged
+	else
+		onThemeChanged(kind); // the same theme may have new settings
 }
 
 // ---------------------------------------------------------------------------
@@ -1500,7 +1477,7 @@ QWidget *WordSongDock::buildCardsTab()
 	bar->addWidget(save);
 	bar->addWidget(remove);
 	bar->addStretch(1);
-	bar->addWidget(themeCards_);
+	bar->addWidget(withEditButton(themeCards_, ContentKind::Card, w));
 	v->addLayout(bar);
 
 	cardList_ = new QListWidget(w);

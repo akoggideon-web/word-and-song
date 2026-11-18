@@ -72,8 +72,8 @@ private:
 	void refreshThemeCombos();
 	std::string themeFor(ContentKind kind) const;
 	void onThemeChanged(ContentKind kind);
-	void saveLookAsTheme();
-	void deleteTheme();
+	void openThemeEditor(ContentKind kind);
+	QWidget *withEditButton(QComboBox *combo, ContentKind kind, QWidget *parent);
 
 	// Cards
 	void previewCard();

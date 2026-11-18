@@ -13,12 +13,14 @@
 #include <QFontMetrics>
 #include <QImage>
 #include <QImageReader>
+#include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
 #include <QString>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace ws {
 namespace {
@@ -70,6 +72,8 @@ struct DisplaySource {
 	int themeMode = FollowDock;
 	bool showScripture = true, showLyrics = true, showCards = true, showGraphics = true;
 	bool sample = false;
+	int sizePct = 100; // per-display size adjustment, applied on top of any theme
+	int offsetY = 0;   // per-display nudge, positive = up
 	uint64_t seenRevision = 0, seenThemeRevision = 0;
 	bool dirty = true;
 	Card cur, prev;
@@ -132,28 +136,53 @@ Style readLook(obs_data_t *settings)
 	return s;
 }
 
+// Sizes are designed for a 1080p canvas; scale them for other canvases and the display's size %.
+void scaleStyle(Style &s, double f)
+{
+	if (std::abs(f - 1.0) < 0.001)
+		return;
+	auto sc = [f](int v) {
+		return std::max(0, (int)std::lround(v * f));
+	};
+	s.bodySize = std::max(8, sc(s.bodySize));
+	s.titleSize = std::max(8, sc(s.titleSize));
+	s.padding = sc(s.padding);
+	s.margin = sc(s.margin);
+	s.radius = sc(s.radius);
+}
+
+Style themeStyle(const std::string &json)
+{
+	Style s;
+	obs_data_t *look = obs_data_create_from_json(json.c_str());
+	if (look) {
+		getDefaults(look);
+		s = readLook(look);
+		obs_data_release(look);
+	}
+	return s;
+}
+
 // The style to draw `content` with: the dock's theme for it, or this display's own settings.
 Style effectiveStyle(DisplaySource *d, const LiveContent &content)
 {
+	Style s = d->own;
+	bool fromTheme = false;
 	if (d->themeMode == FollowDock && !content.themeId.empty()) {
 		ThemeEntry theme;
 		if (ThemeLibrary::instance().find(content.themeId, theme)) {
-			obs_data_t *look = obs_data_create_from_json(theme.json.c_str());
-			if (look) {
-				getDefaults(look);
-				Style s = readLook(look);
-				obs_data_release(look);
-				if (d->layout == FullScreen) {
-					// Themes are designed as lower thirds; scale them up for a full screen.
-					s.bodySize = s.bodySize * 3 / 2;
-					s.titleSize = s.titleSize * 5 / 4;
-					s.padding = std::max(s.padding, 90);
-				}
-				return s;
-			}
+			s = themeStyle(theme.json);
+			fromTheme = true;
 		}
 	}
-	return d->own;
+	if (fromTheme && d->layout == FullScreen) {
+		// Themes are designed as lower thirds; scale them up for a full screen.
+		s.bodySize = s.bodySize * 3 / 2;
+		s.titleSize = s.titleSize * 5 / 4;
+		s.padding = std::max(s.padding, 90);
+	}
+	scaleStyle(s, (double)d->canvasH / 1080.0 * (double)d->sizePct / 100.0);
+	return s;
 }
 
 void drawShadowedText(QPainter &p, const QRect &r, int align, const QFont &f, const QColor &c, const QString &t,
@@ -377,6 +406,8 @@ void readSettings(DisplaySource *d, obs_data_t *settings)
 	d->showCards = obs_data_get_bool(settings, "show_cards");
 	d->showGraphics = obs_data_get_bool(settings, "show_graphics");
 	d->sample = obs_data_get_bool(settings, "sample");
+	d->sizePct = (int)obs_data_get_int(settings, "size_pct");
+	d->offsetY = (int)obs_data_get_int(settings, "offset_y");
 	d->dirty = true;
 }
 
@@ -450,6 +481,17 @@ void getDefaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "max_lines", 4);
 	obs_data_set_default_int(settings, "fade_ms", 350);
 	obs_data_set_default_bool(settings, "sample", false);
+	obs_data_set_default_int(settings, "size_pct", 100);
+	obs_data_set_default_int(settings, "offset_y", 0);
+}
+
+std::function<void()> g_editThemes;
+
+bool editThemesClicked(obs_properties_t *, obs_property_t *, void *)
+{
+	if (g_editThemes)
+		g_editThemes();
+	return false;
 }
 
 bool themeModeChanged(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
@@ -480,6 +522,10 @@ obs_properties_t *getProperties(void *)
 	obs_properties_add_bool(props, "show_cards", obs_module_text("Show.Cards"));
 	obs_properties_add_bool(props, "show_graphics", obs_module_text("Show.Graphics"));
 	obs_properties_add_bool(props, "sample", obs_module_text("Sample"));
+	obs_properties_add_int_slider(props, "size_pct", obs_module_text("SizePct"), 50, 200, 5);
+	p = obs_properties_add_int_slider(props, "offset_y", obs_module_text("OffsetY"), -500, 500, 2);
+	obs_property_set_long_description(p, obs_module_text("OffsetY.Tip"));
+	obs_properties_add_button(props, "edit_themes", obs_module_text("EditThemes"), editThemesClicked);
 
 	obs_properties_t *look = obs_properties_create();
 	p = obs_properties_add_list(look, "style", obs_module_text("Style"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
@@ -582,6 +628,8 @@ void videoTick(void *data, float)
 		QImage img = c.kind == ContentKind::Graphic
 				     ? renderGraphic(c.imagePath, d->canvasW, d->canvasH, x, y)
 				     : renderText(c, style, d->layout, d->canvasW, d->canvasH, x, y);
+		if (c.kind != ContentKind::Graphic)
+			y -= (int)std::lround(d->offsetY * (double)d->canvasH / 1080.0);
 		next = makeCard(img, x, y);
 	}
 
@@ -656,6 +704,50 @@ uint32_t getHeight(void *data)
 }
 
 } // namespace
+
+void setEditThemesHandler(std::function<void()> handler)
+{
+	g_editThemes = std::move(handler);
+}
+
+void applyLookDefaults(obs_data_t *settings)
+{
+	getDefaults(settings);
+}
+
+QImage renderThemePreview(const std::string &lookJson, ContentKind kind, int width, int height)
+{
+	const uint32_t cw = 1920, ch = 1080;
+	QImage frame((int)cw, (int)ch, QImage::Format_RGBA8888_Premultiplied);
+	// A stand-in for camera video so the box and text contrast read realistically.
+	QPainter p(&frame);
+	QLinearGradient g(0, 0, cw, ch);
+	g.setColorAt(0.0, QColor(58, 74, 92));
+	g.setColorAt(0.55, QColor(96, 84, 76));
+	g.setColorAt(1.0, QColor(34, 38, 48));
+	p.fillRect(frame.rect(), g);
+	p.fillRect(QRect(760, 140, 400, 700), QColor(30, 30, 34, 90)); // a "person"
+	LiveContent c;
+	c.visible = true;
+	c.kind = kind;
+	if (kind == ContentKind::Lyrics) {
+		c.title = "Chorus";
+		c.body = "Great is Thy faithfulness\nMorning by morning new mercies I see";
+	} else if (kind == ContentKind::Card) {
+		c.title = "Senior Pastor";
+		c.body = "Pastor Jane Doe";
+	} else {
+		c.kind = ContentKind::Scripture;
+		c.title = "John 3:16 (KJV)";
+		c.body = "For God so loved the world, that he gave his only begotten Son, that whosoever believeth "
+			 "in him should not perish, but have everlasting life.";
+	}
+	int x = 0, y = 0;
+	QImage card = renderText(c, themeStyle(lookJson), LowerThird, cw, ch, x, y);
+	p.drawImage(x, y, card);
+	p.end();
+	return frame.scaled(width, height, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+}
 
 void registerDisplaySource()
 {

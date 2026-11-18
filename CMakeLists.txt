@@ -43,6 +43,7 @@ target_sources(
     src/lower-third-source.cpp
     src/songs.cpp
     src/themes.cpp
+    src/theme-editor.cpp
     src/dock.cpp
     src/listener.cpp
     src/matcher.cpp
