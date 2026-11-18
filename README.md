@@ -5,7 +5,8 @@ with optional **offline** speech detection (Whisper) that suggests verses as the
 reads them and follows along with worship lyrics.
 
 - **Scripture** – type `jn 3:16`, `1 cor 13 4-7`, `ps 23` or any words to search. Enter shows it.
-  KJV, ASV, WEB and BSB are built in; import your church's licensed translation (NKJV, NIV, ESV…).
+  13 public-domain translations are built in (see below); import your church's licensed translation
+  (NKJV, NIV, ESV…).
 - **Lyrics** – song library + service setlist. Section headers (`[Verse 1]`, `Chorus:`) and blank
   lines become slides; long sections split automatically (2 lines per slide by default).
 - **Listen** – picks up "John chapter three verse sixteen", "Romans 8:28", or a verse being quoted
@@ -103,6 +104,26 @@ Styles: **Card** (rounded box), **Full-width bar** (edge-to-edge with an accent 
 Apple Silicon Macs use the GPU (Metal). Windows uses the CPU (AVX2); base.en needs roughly one
 core while listening.
 
+## Built-in translations
+
+All public domain, from [scrollmapper/bible_databases](https://github.com/scrollmapper/bible_databases)
+and [TehShrike/world-english-bible](https://github.com/TehShrike/world-english-bible):
+
+| Code | Translation | | Code | Translation |
+|---|---|---|---|---|
+| KJV | King James Version | | BBE | Bible in Basic English (1949/1964) |
+| WEB | World English Bible | | YLT | Young's Literal Translation (1898) |
+| BSB | Berean Standard Bible | | WBS | Webster's Bible (1833, revised) |
+| ASV | American Standard Version (1901) | | GNV | Geneva Bible (1599) |
+| AKJV | American King James Version | | ACV | A Conservative Version |
+| UKJV | Updated King James Version | | RV1909 | Reina-Valera 1909 (Español) |
+| NHEB | New Heart English Bible | | | |
+
+Modern translations such as NIV, NKJV, ESV, NLT, AMP and MSG are copyrighted, so they can't be
+shipped with the plugin. If your church is licensed to display one, import it (below).
+Reina-Valera references show Spanish book names on screen ("Juan 3:16"); typing references in the
+search box is in English ("jn 3:16").
+
 ## Importing a licensed translation
 
 Dock **⋯ → Import a Bible translation…** accepts:
@@ -137,5 +158,4 @@ whisper.cpp checkout instead of downloading v1.8.5.
 
 - Plugin: GPL-2.0-or-later (see `LICENSE`), based on the official OBS plugin template.
 - Speech recognition: [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT).
-- Bible texts: King James Version, American Standard Version (1901), World English Bible and
-  Berean Standard Bible are in the public domain.
+- Bible texts: all bundled translations are in the public domain (list above).

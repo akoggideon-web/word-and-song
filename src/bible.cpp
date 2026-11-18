@@ -43,6 +43,11 @@ std::shared_ptr<Bible> Bible::loadTsv(const QString &path, QString *error)
 		if (line.startsWith('#')) {
 			if (line.startsWith(QStringLiteral("#name\t")))
 				b->name_ = line.mid(6).trimmed();
+			else if (line.startsWith(QStringLiteral("#book\t"))) {
+				QStringList p = line.split('\t');
+				if (p.size() >= 3 && p[1].toInt() >= 1 && p[1].toInt() <= kBookCount)
+					b->bookNames_[p[1].toInt()] = p[2].trimmed();
+			}
 			continue;
 		}
 		QStringList p = line.split('\t');
@@ -82,6 +87,30 @@ void Bible::index()
 		chapterStart_.emplace(chapterKey(v.book, v.chapter), i);
 		lowered_.push_back(v.text.toLower());
 	}
+}
+
+QString Bible::bookName(int book) const
+{
+	auto it = bookNames_.find(book);
+	return it != bookNames_.end() ? it->second : QString::fromStdString(ws::bookName(book));
+}
+
+QString Bible::formatReference(const Reference &ref) const
+{
+	if (bookNames_.empty())
+		return QString::fromStdString(ws::formatReference(ref));
+	QString name = bookName(ref.book);
+	if (ref.book == 19 && ref.chapter && name.endsWith('s'))
+		name.chop(1); // "Salmos 23" reads as "Salmo 23", like "Psalm 23"
+	if (!ref.chapter)
+		return name;
+	QString s = QStringLiteral("%1 %2").arg(name).arg(ref.chapter);
+	if (ref.verseStart) {
+		s += QStringLiteral(":%1").arg(ref.verseStart);
+		if (ref.verseEnd > ref.verseStart)
+			s += QStringLiteral("-%1").arg(ref.verseEnd);
+	}
+	return s;
 }
 
 std::vector<const Verse *> Bible::chapter(int book, int ch) const

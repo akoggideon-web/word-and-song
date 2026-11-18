@@ -41,6 +41,8 @@
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QAbstractItemView>
+#include <QStyledItemDelegate>
 #include <QImageReader>
 #include <QPixmap>
 #include <QPainter>
@@ -73,6 +75,21 @@ QString elide(const QString &s, int n)
 	QString t = s.simplified();
 	return t.size() > n ? t.left(n - 1) + QChar(0x2026) : t;
 }
+
+// The translation list shows "KJV   King James Version"; the closed box keeps just "KJV".
+class TranslationDelegate : public QStyledItemDelegate {
+public:
+	using QStyledItemDelegate::QStyledItemDelegate;
+
+protected:
+	void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override
+	{
+		QStyledItemDelegate::initStyleOption(option, index);
+		QString full = index.data(Qt::ToolTipRole).toString();
+		if (!full.isEmpty() && full != option->text)
+			option->text = QStringLiteral("%1   %2").arg(option->text, full);
+	}
+};
 
 // Keeps keyboard focus in the search box useful: Up/Down move through the verse list.
 class SearchEdit : public QLineEdit {
@@ -265,8 +282,14 @@ QWidget *WordSongDock::buildScriptureTab()
 	auto *row1 = new QHBoxLayout();
 	translation_ = new QComboBox(w);
 	translation_->setToolTip(T("TranslationTip"));
-	for (const QString &a : BibleLibrary::instance().abbrevs())
+	for (const QString &a : BibleLibrary::instance().abbrevs()) {
 		translation_->addItem(a, a);
+		translation_->setItemData(translation_->count() - 1, BibleLibrary::instance().displayName(a),
+					  Qt::ToolTipRole);
+	}
+	translation_->setItemDelegate(new TranslationDelegate(translation_));
+	translation_->view()->setMinimumWidth(340);
+	translation_->setMaxVisibleItems(16);
 	translation_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
 	search_ = new SearchEdit(verseList_, w);
 	search_->setPlaceholderText(T("SearchPlaceholder"));
@@ -464,7 +487,7 @@ LiveContent WordSongDock::scriptureContent(const std::vector<const Verse *> &ver
 	const Verse *a = verses.front();
 	const Verse *z = verses.back();
 	Reference r{a->book, a->chapter, a->verse, a->chapter == z->chapter ? z->verse : a->verse};
-	QString title = QString::fromStdString(formatReference(r));
+	QString title = bible_ ? bible_->formatReference(r) : QString::fromStdString(formatReference(r));
 	if (showTranslation_->isChecked() && bible_)
 		title += QStringLiteral(" (%1)").arg(bible_->abbrev());
 	c.title = title.toStdString();
@@ -547,8 +570,11 @@ void WordSongDock::importTranslation()
 	}
 	QString key = abbrev.trimmed().toUpper();
 	key.remove(QRegularExpression(QStringLiteral("[^A-Z0-9_-]")));
-	if (translation_->findData(key) < 0)
+	if (translation_->findData(key) < 0) {
 		translation_->addItem(key, key);
+		translation_->setItemData(translation_->count() - 1, BibleLibrary::instance().displayName(key),
+					  Qt::ToolTipRole);
+	}
 	translation_->setCurrentIndex(translation_->findData(key));
 	QMessageBox::information(this, T("Import.Title"), T("Import.Done").arg(key));
 }

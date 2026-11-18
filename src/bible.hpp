@@ -42,9 +42,15 @@ public:
 
 	const std::vector<Verse> &verses() const { return verses_; }
 
+	// Book name in this translation's language ("Juan"), or the English name.
+	QString bookName(int book) const;
+	// "Juan 3:16-18" / "John 3:16" using this translation's book names.
+	QString formatReference(const Reference &ref) const;
+
 private:
 	void index();
 	QString abbrev_, name_;
+	std::map<int, QString> bookNames_; // from "#book<TAB>n<TAB>name" lines
 	std::vector<Verse> verses_;
 	std::vector<QString> lowered_;
 	std::map<uint32_t, size_t> chapterStart_;            // key = book<<16 | chapter
